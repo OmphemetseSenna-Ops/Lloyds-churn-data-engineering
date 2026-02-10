@@ -1,6 +1,6 @@
 import pandas as pd
 
-# Extract all sheets and their columns dynamically
+
 def extract_sheets(file_path):
     try:
         xls = pd.ExcelFile(file_path)
