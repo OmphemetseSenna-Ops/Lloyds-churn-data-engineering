@@ -3,7 +3,7 @@ import datetime
 import time
 
 from config import config, utils, db_logger
-from src import extractor
+from src import extractor, validator
 
 
 MAX_RETRIES = config.get_max_retries()
@@ -43,13 +43,45 @@ def run_extraction_batch():
                 db_logger.log_process(process_name, start_time, end_time, "Failure", records_inserted, str(e))
 
 
-def run_validation_batch():
-    # to continue.....
-        pass
+def run_validation_batch(extracted_file, original_file): 
+    process_name = config.get_process_name()
+    start_time = datetime.datetime.now() 
+    attempt = 0 
+    records_validated = 0 
+    while attempt < MAX_RETRIES: 
+        attempt += 1 
+        print(f"\nValidation attempt {attempt}...") 
+        try: 
+            original_sheets = utils.extract_sheets(original_file) 
+            extracted_sheets = utils.extract_sheets(extracted_file) 
+            merged_df = ( original_sheets["Customer_Demographics"]["data"] .merge(original_sheets["Transaction_History"]["data"], on="CustomerID", how="outer") .merge(original_sheets["Customer_Service"]["data"], on="CustomerID", how="outer") .merge(original_sheets["Churn_Status"]["data"], on="CustomerID", how="outer") ) 
+            extracted_df = extracted_sheets["Sheet1"]["data"]
+            validator.validate_structure(original_sheets, extracted_sheets)
+            validator.validate_data(merged_df, extracted_df)
+            end_time = datetime.datetime.now() 
+            duration = (end_time - start_time).total_seconds() 
+            records_validated = len(extracted_df) 
+            print(f"Validation batch completed successfully in {duration:.2f} seconds.") 
+            db_logger.log_process(process_name, start_time, end_time, "Success", records_validated, f"Validation succeeded on attempt {attempt}") 
+            break
+        except Exception as e: 
+            print(f"Error during validation batch: {e}") 
+            if attempt < MAX_RETRIES: 
+                print(f"Retrying validation in {RETRY_DELAY} seconds...") 
+                time.sleep(RETRY_DELAY) 
+            else: 
+                end_time = datetime.datetime.now() 
+                duration = (end_time - start_time).total_seconds() 
+                print(f"Validation batch failed after {MAX_RETRIES} attempts. Total duration: {duration:.2f} seconds.") 
+                db_logger.log_process(process_name, start_time, end_time, "Failure", records_validated, str(e))
 
 def main():
     print("Starting ETL process...")
-    run_extraction_batch()
+    output_file = run_extraction_batch()
+    original_file = config.get_file_path("DATA_FILE_PATH")
+    run_validation_batch(output_file, original_file)
+
 
 if __name__ == "__main__":
     main()
+
