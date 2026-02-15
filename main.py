@@ -3,7 +3,7 @@ import datetime
 import time
 
 from config import config, utils, db_logger
-from src import extractor, validator
+from src import extractor, validator, explore_data
 
 
 MAX_RETRIES = config.get_max_retries()
@@ -23,10 +23,9 @@ def run_extraction_batch():
             duration = (end_time - start_time).total_seconds()
             records_inserted = 1
             print(f"Extraction batch completed successfully in {duration:.2f} seconds.")
-
-
+            
             db_logger.log_process(process_name, start_time, end_time, "Success", records_inserted, f"Extraction succeeded on attempt {attempt}")
-            return output_file
+            return True, output_file
         
         except Exception as e:
             print(f"Error during extraction batch: {e}")
@@ -41,6 +40,7 @@ def run_extraction_batch():
                 
 
                 db_logger.log_process(process_name, start_time, end_time, "Failure", records_inserted, str(e))
+                return False, None
 
 
 def run_validation_batch(extracted_file, original_file): 
@@ -62,8 +62,9 @@ def run_validation_batch(extracted_file, original_file):
             duration = (end_time - start_time).total_seconds() 
             records_validated = len(extracted_df) 
             print(f"Validation batch completed successfully in {duration:.2f} seconds.") 
+
             db_logger.log_process(process_name, start_time, end_time, "Success", records_validated, f"Validation succeeded on attempt {attempt}") 
-            break
+            return True
         except Exception as e: 
             print(f"Error during validation batch: {e}") 
             if attempt < MAX_RETRIES: 
@@ -73,13 +74,56 @@ def run_validation_batch(extracted_file, original_file):
                 end_time = datetime.datetime.now() 
                 duration = (end_time - start_time).total_seconds() 
                 print(f"Validation batch failed after {MAX_RETRIES} attempts. Total duration: {duration:.2f} seconds.") 
+
                 db_logger.log_process(process_name, start_time, end_time, "Failure", records_validated, str(e))
+                return False
+
+
+def run_profiling_batch(extracted_data):
+    process_name = config.get_process_name() + "_Profiling"
+    start_time = datetime.datetime.now()
+    attempt = 0
+    records_profiled = 0
+
+    while attempt < MAX_RETRIES:
+        attempt += 1
+        print(f"\nProfiling attempt {attempt}...")
+        try:
+            customer_churn_data = pd.read_excel(extracted_data)
+            records_profiled = explore_data.explore_dataset(customer_churn_data)
+            
+            end_time = datetime.datetime.now()
+            duration = (end_time - start_time).total_seconds()
+            print(f"Profiling batch completed successfully in {duration:.2f} seconds.")
+
+            db_logger.log_process(process_name, start_time, end_time, "Success", records_profiled, f"Profiling succeeded on attempt {attempt}")
+            return True
+        except Exception as e:
+            print(f"Error during profiling batch: {e}")
+            if attempt < MAX_RETRIES:
+                print(f"Retrying profiling in {RETRY_DELAY} seconds...")
+                time.sleep(RETRY_DELAY)
+            else:
+                end_time = datetime.datetime.now()
+                duration = (end_time - start_time).total_seconds()
+                print(f"Profiling batch failed after {MAX_RETRIES} attempts. Total duration: {duration:.2f} seconds.")
+
+                db_logger.log_process(process_name, start_time, end_time, "Failure", records_profiled, str(e))
+                return False
+
 
 def main():
     print("Starting ETL process...")
-    output_file = run_extraction_batch()
-    original_file = config.get_file_path("DATA_FILE_PATH")
-    run_validation_batch(output_file, original_file)
+
+    success, output_file = run_extraction_batch()
+    if success:
+        original_file = config.get_file_path("DATA_FILE_PATH")
+        if run_validation_batch(output_file, original_file):
+            if run_profiling_batch(output_file):
+                print("ETL process completed successfully.")
+            else:
+                print("ETL process completed with profiling errors.")
+
 
 
 if __name__ == "__main__":
